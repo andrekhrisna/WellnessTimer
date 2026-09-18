@@ -8,14 +8,14 @@
   :root {
     --sky: #d6e6ee; --far: #9fbccb; --near: #6f93a5; --sun: #f2c14e;
     --paper: #f5f8f8; --surface: #ffffff; --ink: #1d2a31; --muted: #5b6d76;
-    --line: #d5e0e4; --focus: #36566a; --rest: #3f7a55; --water: #2c6f9b; --warn: #a05a1c;
+    --line: #d5e0e4; --focus: #36566a; --rest: #3f7a55; --water: #2c6f9b; --warn: #a05a1c; --cloud: #ffffff;
     --btn-ink: #ffffff;
     color-scheme: light;
   }
   :root[data-theme="dark"] {
     --sky: #1b2c36; --far: #28404d; --near: #335262; --sun: #e0b34a;
     --paper: #10181d; --surface: #172229; --ink: #e2ebee; --muted: #93a6ae;
-    --line: #26363f; --focus: #7fa9c2; --rest: #7cc193; --water: #74b2dc; --warn: #e3a15f;
+    --line: #26363f; --focus: #7fa9c2; --rest: #7cc193; --water: #74b2dc; --warn: #e3a15f; --cloud: #3a5361;
     --btn-ink: #0f1a20;
     color-scheme: dark;
   }
@@ -55,7 +55,42 @@
   .horizon .near { fill: var(--near); }
   .app[data-phase="break"] .horizon { height: 140px; }
   .app[data-phase="break"] .horizon .sun { opacity: 1; transform: translateY(0); }
-  .app[data-paused="true"] .horizon { filter: grayscale(1); opacity: .7; }
+  .app[data-paused="true"] .horizon { filter: grayscale(.6); opacity: .8; }
+
+  /* Gerak: awan selalu melayang pelan; burung & orang berjalan hanya saat istirahat */
+  .horizon .cloud { fill: var(--cloud); fill-opacity: .85; }
+  .horizon .c1 { animation: drift 80s linear infinite; animation-delay: -25s; }
+  .horizon .c2 { animation: drift 120s linear infinite; animation-delay: -70s; fill-opacity: .6; }
+  @keyframes drift { from { transform: translateX(-60px); } to { transform: translateX(480px); } }
+
+  .horizon .birds { opacity: 0; transition: opacity .6s ease; }
+  .app[data-phase="break"] .horizon .birds { opacity: 1; animation: glide 16s ease-in-out infinite alternate; }
+  @keyframes glide { from { transform: translate(0, 0); } to { transform: translate(60px, -6px); } }
+  .horizon .bird {
+    fill: none; stroke: var(--ink); stroke-opacity: .55; stroke-width: 1.2; stroke-linecap: round;
+    transform-box: fill-box; transform-origin: center; animation: flap .45s ease-in-out infinite alternate;
+  }
+  .horizon .bird.b2 { animation-delay: -.2s; }
+  @keyframes flap { from { transform: scaleY(1); } to { transform: scaleY(.35); } }
+
+  .horizon .walker { opacity: 0; transition: opacity .5s ease; }
+  .app[data-phase="break"] .horizon .walker { opacity: 1; animation: walk 22s linear infinite; }
+  @keyframes walk { from { transform: translateX(-20px); } to { transform: translateX(440px); } }
+  .horizon .figure { fill: var(--ink); fill-opacity: .8; }
+  .horizon .bob { animation: bob .28s ease-in-out infinite alternate; }
+  @keyframes bob { from { transform: translateY(0); } to { transform: translateY(-.8px); } }
+  .horizon .limb { transform-box: fill-box; transform-origin: top center; }
+  .horizon .leg { animation: swing-leg .56s ease-in-out infinite alternate; }
+  .horizon .arm { animation: swing-arm .56s ease-in-out infinite alternate; }
+  .horizon .leg.b, .horizon .arm.a { animation-delay: -.56s; }
+  @keyframes swing-leg { from { transform: rotate(28deg); } to { transform: rotate(-28deg); } }
+  @keyframes swing-arm { from { transform: rotate(-22deg); } to { transform: rotate(22deg); } }
+  .horizon .cup { fill: var(--water); fill-opacity: 0; transition: fill-opacity .4s ease; }
+  .app[data-water="true"] .horizon .cup { fill-opacity: 1; }
+
+  /* Dijeda: semua gerakan berhenti di tempat */
+  .app[data-paused="true"] .horizon,
+  .app[data-paused="true"] .horizon * { animation-play-state: paused !important; }
 
   .body { padding: 22px 24px 24px; text-align: center; }
   .phase { margin: 0; font-size: 15px; font-weight: 600; color: var(--muted); }
@@ -99,6 +134,8 @@
   [hidden] { display: none !important; }
   @media (prefers-reduced-motion: reduce) {
     .horizon, .horizon .sun { transition: none; }
+    .horizon * { animation: none !important; }
+    .app[data-phase="break"] .horizon .walker { transform: translateX(120px); }
   }
 </style>
 </head>
@@ -113,10 +150,35 @@
   </div>
 
   <div class="horizon" aria-hidden="true">
-    <svg viewBox="0 0 420 140" preserveAspectRatio="none">
+    <svg viewBox="0 0 420 140" preserveAspectRatio="xMidYMax slice">
       <circle class="sun" cx="310" cy="62" r="18"/>
+      <g class="cloud c1"><g transform="translate(0 34)">
+        <ellipse cx="0" cy="0" rx="22" ry="7"/><ellipse cx="11" cy="-5" rx="12" ry="7"/><ellipse cx="-10" cy="-3" rx="10" ry="6"/>
+      </g></g>
+      <g class="cloud c2"><g transform="translate(0 86)">
+        <ellipse cx="0" cy="0" rx="18" ry="5"/><ellipse cx="8" cy="-4" rx="9" ry="5"/>
+      </g></g>
+      <g class="birds">
+        <g transform="translate(118 44)"><path class="bird b1" d="M-5 0 Q-2.5 -3 0 0 Q2.5 -3 5 0"/></g>
+        <g transform="translate(142 34)"><path class="bird b2" d="M-4 0 Q-2 -2.5 0 0 Q2 -2.5 4 0"/></g>
+      </g>
       <path class="far" d="M0 110 C60 88 110 96 160 100 C220 105 260 82 320 88 C370 93 395 100 420 96 L420 140 L0 140 Z"/>
-      <path class="near" d="M0 124 C70 112 130 128 200 122 C270 116 330 130 420 118 L420 140 L0 140 Z"/>
+      <path class="near" d="M0 123 C80 120 150 121 210 122 C280 123 340 120 420 122 L420 140 L0 140 Z"/>
+      <g class="walker"><g transform="translate(0 122) scale(1.35)">
+        <g class="figure bob">
+          <g transform="translate(0 -14.6)"><g class="limb arm b"><rect x="-.7" y="0" width="1.4" height="6.5" rx=".7"/></g></g>
+          <g transform="translate(0 -8)">
+            <rect class="limb leg a" x="-.8" y="0" width="1.6" height="8" rx=".8"/>
+            <rect class="limb leg b" x="-.8" y="0" width="1.6" height="8" rx=".8"/>
+          </g>
+          <rect x="-1.1" y="-15.5" width="2.2" height="8" rx="1.1"/>
+          <circle cx="0" cy="-18.6" r="2.7"/>
+          <g transform="translate(0 -14.6)"><g class="limb arm a">
+            <rect x="-.7" y="0" width="1.4" height="6.5" rx=".7"/>
+            <rect class="cup" x="-1.4" y="5.6" width="2.8" height="3.2" rx=".5"/>
+          </g></g>
+        </g>
+      </g></g>
     </svg>
   </div>
 
@@ -388,6 +450,7 @@
     const now = Date.now();
     app.dataset.phase = S.phase;
     app.dataset.paused = String(S.paused);
+    app.dataset.water = String(S.phase === 'break' && S.isWater);
 
     const idle = S.phase === 'idle';
     setupEl.hidden = !idle;
