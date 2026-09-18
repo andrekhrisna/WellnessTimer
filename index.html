@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wellness Timer</title>
+<style>
+  :root {
+    --sky: #d6e6ee; --far: #9fbccb; --near: #6f93a5; --sun: #f2c14e;
+    --paper: #f5f8f8; --surface: #ffffff; --ink: #1d2a31; --muted: #5b6d76;
+    --line: #d5e0e4; --focus: #36566a; --rest: #3f7a55; --water: #2c6f9b; --warn: #a05a1c;
+    --btn-ink: #ffffff;
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --sky: #1b2c36; --far: #28404d; --near: #335262; --sun: #e0b34a;
+    --paper: #10181d; --surface: #172229; --ink: #e2ebee; --muted: #93a6ae;
+    --line: #26363f; --focus: #7fa9c2; --rest: #7cc193; --water: #74b2dc; --warn: #e3a15f;
+    --btn-ink: #0f1a20;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px;
+    background: var(--paper); color: var(--ink);
+    font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+    font-size: 15px; line-height: 1.5;
+  }
+  .app {
+    width: 100%; max-width: 420px; background: var(--surface);
+    border: 1px solid var(--line); border-radius: 18px; overflow: hidden;
+  }
+  .bar { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; gap: 8px; }
+  .bar-right { display: flex; gap: 4px; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .icon {
+    width: 36px; height: 36px; display: grid; place-items: center;
+    background: none; border: 1px solid transparent; border-radius: 10px; color: var(--muted);
+  }
+  .icon:hover { border-color: var(--line); color: var(--ink); }
+  .icon svg { width: 20px; height: 20px; }
+  .notif {
+    background: none; border: 1px solid var(--line); border-radius: 999px;
+    padding: 5px 12px; font-size: 13px; color: var(--muted);
+  }
+  .notif[data-state="granted"] { color: var(--rest); }
+  .notif[data-state="denied"], .notif[data-state="unsupported"] { color: var(--warn); }
+
+  /* Horizon: dekat & redup saat fokus, lapang & terang saat istirahat */
+  .horizon { height: 64px; background: var(--sky); position: relative; overflow: hidden; transition: height .6s ease; }
+  .horizon svg { position: absolute; left: 0; bottom: 0; width: 100%; height: 100%; }
+  .horizon .sun { fill: var(--sun); opacity: 0; transition: opacity .6s ease, transform .6s ease; transform: translateY(20px); }
+  .horizon .far { fill: var(--far); }
+  .horizon .near { fill: var(--near); }
+  .app[data-phase="break"] .horizon { height: 140px; }
+  .app[data-phase="break"] .horizon .sun { opacity: 1; transform: translateY(0); }
+  .app[data-paused="true"] .horizon { filter: grayscale(1); opacity: .7; }
+
+  .body { padding: 22px 24px 24px; text-align: center; }
+  .phase { margin: 0; font-size: 15px; font-weight: 600; color: var(--muted); }
+  .app[data-phase="focus"] .phase { color: var(--focus); }
+  .app[data-phase="break"] .phase { color: var(--rest); }
+  .clock {
+    font-family: Bahnschrift, "DIN Alternate", "Segoe UI", sans-serif;
+    font-variant-numeric: tabular-nums; font-weight: 600;
+    font-size: clamp(64px, 20vw, 92px); line-height: 1; letter-spacing: -1px; margin: 6px 0 10px;
+  }
+  .hint { margin: 0 auto; max-width: 32ch; color: var(--muted); min-height: 3em; }
+  .eye {
+    margin: 14px auto 0; padding: 10px 14px; border-radius: 12px; max-width: 320px;
+    background: color-mix(in srgb, var(--rest) 12%, transparent); color: var(--ink);
+  }
+  .eye strong { font-variant-numeric: tabular-nums; }
+  .water { color: var(--water); font-weight: 600; }
+
+  .setup { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .presets { display: flex; gap: 8px; justify-content: center; margin-bottom: 14px; }
+  .preset {
+    background: none; border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; font-size: 13px;
+  }
+  .preset[aria-pressed="true"] { border-color: var(--focus); color: var(--focus); font-weight: 600; }
+  .fields { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; font-size: 14px; }
+  .fields label { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .fields input {
+    width: 58px; padding: 6px; text-align: center; font: inherit; font-weight: 600;
+    background: var(--paper); color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
+  }
+
+  .actions { display: flex; gap: 10px; margin-top: 20px; }
+  .btn {
+    flex: 1; padding: 12px 16px; border-radius: 12px; border: 1px solid transparent; font-weight: 600;
+  }
+  .btn-primary { background: var(--focus); color: var(--btn-ink); }
+  .app[data-phase="break"] .btn-primary { background: var(--rest); }
+  .btn-quiet { background: none; border-color: var(--line); }
+  .notice { margin: 14px 0 0; font-size: 13px; color: var(--warn); min-height: 1em; }
+
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: reduce) {
+    .horizon, .horizon .sun { transition: none; }
+  }
+</style>
+</head>
+<body>
+<main class="app" id="app" data-phase="idle" data-paused="false">
+  <div class="bar">
+    <button class="notif" id="notifBtn" type="button" data-state="default">Notifikasi: cek</button>
+    <div class="bar-right">
+      <button class="icon" id="soundBtn" type="button" aria-label="Matikan suara"></button>
+      <button class="icon" id="themeBtn" type="button" aria-label="Ganti tema"></button>
+    </div>
+  </div>
+
+  <div class="horizon" aria-hidden="true">
+    <svg viewBox="0 0 420 140" preserveAspectRatio="none">
+      <circle class="sun" cx="310" cy="62" r="18"/>
+      <path class="far" d="M0 110 C60 88 110 96 160 100 C220 105 260 82 320 88 C370 93 395 100 420 96 L420 140 L0 140 Z"/>
+      <path class="near" d="M0 124 C70 112 130 128 200 122 C270 116 330 130 420 118 L420 140 L0 140 Z"/>
+    </svg>
+  </div>
+
+  <div class="body">
+    <p class="phase" id="phase">Siap mulai</p>
+    <div class="clock" id="clock" role="timer">30:00</div>
+    <p class="hint" id="hint" aria-live="polite"></p>
+    <div class="eye" id="eye" hidden aria-live="polite"></div>
+
+    <section class="setup" id="setup">
+      <div class="presets">
+        <button class="preset" type="button" data-focus="30" data-walk="2">Standar 30/2</button>
+        <button class="preset" type="button" data-focus="45" data-walk="5">Deep work 45/5</button>
+      </div>
+      <div class="fields">
+        <label>Fokus <input id="focusIn" type="number" inputmode="numeric" min="1" max="120" step="1"> menit</label>
+        <label>Istirahat <input id="walkIn" type="number" inputmode="numeric" min="1" max="30" step="1"> menit</label>
+      </div>
+    </section>
+
+    <div class="actions">
+      <button class="btn btn-primary" id="startBtn" type="button">Mulai</button>
+      <button class="btn btn-quiet" id="pauseBtn" type="button" hidden>Jeda</button>
+      <button class="btn btn-quiet" id="skipBtn" type="button" hidden>Lanjut fokus</button>
+      <button class="btn btn-quiet" id="stopBtn" type="button" hidden>Berhenti</button>
+    </div>
+    <p class="notice" id="notice" aria-live="polite"></p>
+  </div>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------- Penyimpanan kecil (tema, suara, durasi). Aman bila tidak tersedia. ----------
+  const store = {
+    get(k, fallback) { try { const v = localStorage.getItem('wt:' + k); return v === null ? fallback : JSON.parse(v); } catch (e) { return fallback; } },
+    set(k, v) { try { localStorage.setItem('wt:' + k, JSON.stringify(v)); } catch (e) { /* abaikan */ } }
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const app = $('app'), phaseEl = $('phase'), clockEl = $('clock'), hintEl = $('hint'), eyeEl = $('eye');
+  const setupEl = $('setup'), noticeEl = $('notice');
+  const focusIn = $('focusIn'), walkIn = $('walkIn');
+  const startBtn = $('startBtn'), pauseBtn = $('pauseBtn'), skipBtn = $('skipBtn'), stopBtn = $('stopBtn');
+  const notifBtn = $('notifBtn'), soundBtn = $('soundBtn'), themeBtn = $('themeBtn');
+
+  const EYE_MS = 20000;          // pandang jauh 20 detik
+  const REPEAT_MAX_MS = 90000;   // bunyi ulang paling lambat 90 detik setelah alarm
+
+  const S = {
+    phase: 'idle',        // idle | focus | break
+    paused: false,
+    endAt: 0, remainMs: 0,
+    eyeEndAt: 0, eyeRemainMs: 0,
+    focusMin: clampInt(store.get('focusMin', 30), 1, 120, 30),
+    walkMin: clampInt(store.get('walkMin', 2), 1, 30, 2),
+    cycle: 0, isWater: false,
+    acked: false, repeated: false, repeatAt: 0,
+    muted: !!store.get('muted', false)
+  };
+
+  function clampInt(v, min, max, fallback) {
+    const n = parseInt(v, 10);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, n));
+  }
+  function fmt(ms) {
+    const total = Math.max(0, Math.ceil(ms / 1000));
+    return String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+  }
+  function clockTime(ts) {
+    const d = new Date(ts);
+    return String(d.getHours()).padStart(2, '0') + '.' + String(d.getMinutes()).padStart(2, '0');
+  }
+
+  // ---------- Tema ----------
+  const ICON_MOON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>';
+  const ICON_SUN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+  const ICON_SOUND = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>';
+  const ICON_MUTE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 9l5 6M22 9l-5 6"/></svg>';
+
+  function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    themeBtn.innerHTML = theme === 'dark' ? ICON_SUN : ICON_MOON;
+    themeBtn.setAttribute('aria-label', theme === 'dark' ? 'Pakai tema terang' : 'Pakai tema gelap');
+  }
+  let theme = store.get('theme', null);
+  if (theme !== 'dark' && theme !== 'light') {
+    theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  applyTheme(theme);
+  themeBtn.addEventListener('click', () => {
+    theme = theme === 'dark' ? 'light' : 'dark';
+    applyTheme(theme); store.set('theme', theme);
+  });
+
+  // ---------- Suara: satu AudioContext dipakai ulang ----------
+  let audioCtx = null;
+  function ensureAudio() {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    if (!audioCtx) { try { audioCtx = new AC(); } catch (e) { return null; } }
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+    return audioCtx;
+  }
+  function chime(kind, soft) {
+    if (S.muted) return;
+    const ctx = ensureAudio();
+    if (!ctx) return;
+    const notes = kind === 'break' ? [660, 880, 990] : [880, 660];
+    const peak = soft ? 0.08 : 0.18;
+    const t0 = ctx.currentTime + 0.05;
+    notes.forEach((freq, i) => {
+      const t = t0 + i * 0.32;
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = 'sine'; osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(peak, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(t); osc.stop(t + 0.65);
+    });
+  }
+  function renderSound() {
+    soundBtn.innerHTML = S.muted ? ICON_MUTE : ICON_SOUND;
+    soundBtn.setAttribute('aria-label', S.muted ? 'Nyalakan suara' : 'Matikan suara');
+  }
+  soundBtn.addEventListener('click', () => {
+    S.muted = !S.muted; store.set('muted', S.muted); renderSound();
+    if (!S.muted) chime('back', true);
+  });
+  renderSound();
+
+  // ---------- Notifikasi Windows ----------
+  let currentNotif = null;
+  function notifState() {
+    if (!('Notification' in window)) return 'unsupported';
+    return Notification.permission; // default | granted | denied
+  }
+  function renderNotif() {
+    const st = notifState();
+    notifBtn.dataset.state = st;
+    notifBtn.textContent = {
+      granted: 'Notifikasi aktif · tes',
+      default: 'Izinkan notifikasi',
+      denied: 'Notifikasi diblokir',
+      unsupported: 'Notifikasi tidak tersedia'
+    }[st];
+  }
+  function requestNotif() {
+    if (notifState() !== 'default') return Promise.resolve(notifState());
+    try {
+      const p = Notification.requestPermission();
+      return (p && p.then ? p : Promise.resolve(Notification.permission)).then((r) => { renderNotif(); return r; });
+    } catch (e) { return Promise.resolve(notifState()); }
+  }
+  function notify(title, body, sticky) {
+    if (notifState() !== 'granted') return;
+    try {
+      if (currentNotif) currentNotif.close();
+      currentNotif = new Notification(title, {
+        body, tag: 'wellness-timer', renotify: true, requireInteraction: !!sticky, silent: true
+      });
+      // Klik notifikasi hanya membawa ke tab & menandai sudah dilihat. Tidak mengubah timer.
+      currentNotif.onclick = () => { window.focus(); acknowledge(); if (currentNotif) currentNotif.close(); };
+    } catch (e) {
+      noticeEl.textContent = 'Notifikasi gagal ditampilkan oleh browser. Alarm suara tetap berjalan.';
+    }
+  }
+  function closeNotif() { if (currentNotif) { try { currentNotif.close(); } catch (e) {} currentNotif = null; } }
+
+  notifBtn.addEventListener('click', () => {
+    ensureAudio();
+    const st = notifState();
+    if (st === 'default') {
+      requestNotif().then((r) => {
+        noticeEl.textContent = r === 'granted' ? '' :
+          'Izin notifikasi tidak diberikan. Alarm tetap memakai suara dan judul tab.';
+      });
+    } else if (st === 'granted') {
+      notify('Tes notifikasi', 'Kalau pesan ini muncul, pengingat akan tampil di Windows.', false);
+      noticeEl.textContent = '';
+    } else if (st === 'denied') {
+      noticeEl.textContent = 'Notifikasi diblokir. Buka ikon di kiri alamat (address bar) lalu izinkan Notifikasi, kemudian muat ulang halaman.';
+    } else {
+      noticeEl.textContent = 'Browser ini tidak menyediakan notifikasi. Alarm tetap memakai suara dan judul tab.';
+    }
+  });
+  renderNotif();
+
+  // ---------- Penanda "sudah dilihat" (untuk membatalkan bunyi ulang) ----------
+  function acknowledge() { if (S.phase === 'break') S.acked = true; }
+  document.addEventListener('pointerdown', acknowledge);
+  document.addEventListener('keydown', acknowledge);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { acknowledge(); tick(); }
+  });
+  window.addEventListener('focus', () => { acknowledge(); tick(); });
+
+  // ---------- Detak timer: Web Worker bila bisa, setInterval bila tidak ----------
+  let worker = null, fallbackId = null;
+  function startFallback() { if (!fallbackId) fallbackId = setInterval(tick, 500); }
+  function startTicker() {
+    if (worker) { worker.postMessage('start'); return; }
+    if (fallbackId) return;
+    try {
+      const src = "let id=null;onmessage=function(e){clearInterval(id);id=null;if(e.data==='start'){id=setInterval(function(){postMessage(0)},500)}};";
+      const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+      worker = new Worker(url);
+      worker.onmessage = tick;
+      worker.onerror = () => { try { worker.terminate(); } catch (e) {} worker = null; startFallback(); };
+      worker.postMessage('start');
+    } catch (e) {
+      worker = null; startFallback();
+    }
+  }
+  function stopTicker() {
+    if (worker) worker.postMessage('stop');
+    if (fallbackId) { clearInterval(fallbackId); fallbackId = null; }
+  }
+
+  // ---------- Fase ----------
+  function beginFocus(fromBreak) {
+    closeNotif();
+    S.phase = 'focus'; S.paused = false;
+    S.endAt = Date.now() + S.focusMin * 60000;
+    if (fromBreak) {
+      chime('back', false);
+      notify('Kembali fokus', 'Istirahat selesai. Timer fokus sudah berjalan lagi.', false);
+    }
+    render();
+  }
+  function beginBreak() {
+    S.cycle += 1;
+    S.isWater = S.cycle % 2 === 0;
+    S.phase = 'break'; S.paused = false;
+    const now = Date.now(), walkMs = S.walkMin * 60000;
+    S.endAt = now + walkMs;
+    S.eyeEndAt = now + Math.min(EYE_MS, walkMs);
+    S.acked = false; S.repeated = false;
+    S.repeatAt = now + Math.min(REPEAT_MAX_MS, walkMs / 2);
+    chime('break', false);
+    notify(
+      S.isWater ? 'Berdiri dan minum air' : 'Waktunya berdiri',
+      S.isWater ? 'Pandang jauh 20 detik, ambil segelas air, lalu jalan sebentar.'
+                : 'Pandang sesuatu yang jauh 20 detik, lalu jalan sebentar.',
+      true
+    );
+    render();
+  }
+
+  function tick() {
+    if (S.phase === 'idle' || S.paused) return;
+    const now = Date.now();
+    if (now >= S.endAt) {
+      if (S.phase === 'focus') beginBreak(); else beginFocus(true);
+      return;
+    }
+    if (S.phase === 'break' && !S.acked && !S.repeated && now >= S.repeatAt) {
+      S.repeated = true;
+      chime('break', true);   // sekali saja, lebih pelan
+    }
+    render();
+  }
+
+  // ---------- Tampilan ----------
+  function render() {
+    const now = Date.now();
+    app.dataset.phase = S.phase;
+    app.dataset.paused = String(S.paused);
+
+    const idle = S.phase === 'idle';
+    setupEl.hidden = !idle;
+    startBtn.hidden = !idle;
+    pauseBtn.hidden = idle;
+    stopBtn.hidden = idle;
+    skipBtn.hidden = S.phase !== 'break';
+    pauseBtn.textContent = S.paused ? 'Lanjutkan' : 'Jeda';
+
+    let left;
+    if (idle) left = S.focusMin * 60000;
+    else if (S.paused) left = S.remainMs;
+    else left = S.endAt - now;
+    const time = fmt(left);
+    clockEl.textContent = time;
+
+    if (idle) {
+      phaseEl.textContent = 'Siap mulai';
+      hintEl.textContent = 'Setelah dimulai, timer berjalan sendiri. Tidak ada tombol yang wajib ditekan.';
+      document.title = 'Wellness Timer';
+    } else if (S.phase === 'focus') {
+      phaseEl.textContent = S.paused ? 'Fokus dijeda' : 'Fokus';
+      hintEl.textContent = S.paused ? 'Lanjutkan kapan saja.'
+        : 'Pengingat berikutnya sekitar pukul ' + clockTime(S.endAt) + '.';
+      document.title = (S.paused ? 'Dijeda ' : '') + time + ' · Fokus';
+    } else {
+      phaseEl.textContent = S.paused ? 'Istirahat dijeda' : (S.isWater ? 'Berdiri dan minum air' : 'Waktunya berdiri');
+      hintEl.innerHTML = S.isWater
+        ? 'Pandang jauh, <span class="water">ambil segelas air</span>, lalu jalan sebentar.'
+        : 'Pandang sesuatu yang jauh, lalu jalan sebentar.';
+      document.title = (S.paused ? 'Dijeda ' : '⏰ ') + time + ' · Istirahat';
+    }
+
+    if (S.phase === 'break') {
+      const eyeLeft = S.paused ? S.eyeRemainMs : S.eyeEndAt - now;
+      eyeEl.hidden = false;
+      eyeEl.innerHTML = eyeLeft > 0
+        ? 'Pandang objek sejauh ±6 meter: <strong>' + Math.ceil(eyeLeft / 1000) + '</strong> detik'
+        : 'Mata sudah istirahat. Sisa waktu untuk jalan sebentar.';
+    } else {
+      eyeEl.hidden = true;
+    }
+
+    document.querySelectorAll('.preset').forEach((b) => {
+      b.setAttribute('aria-pressed', String(+b.dataset.focus === S.focusMin && +b.dataset.walk === S.walkMin));
+    });
+  }
+
+  // ---------- Pengaturan durasi ----------
+  function syncInputs() { focusIn.value = S.focusMin; walkIn.value = S.walkMin; }
+  function readInputs() {
+    S.focusMin = clampInt(focusIn.value, 1, 120, S.focusMin);
+    S.walkMin = clampInt(walkIn.value, 1, 30, S.walkMin);
+    store.set('focusMin', S.focusMin); store.set('walkMin', S.walkMin);
+  }
+  [focusIn, walkIn].forEach((inp) => {
+    inp.addEventListener('change', () => { readInputs(); syncInputs(); render(); });
+    inp.addEventListener('input', () => {
+      if (inp === focusIn) {
+        const n = parseInt(focusIn.value, 10);
+        if (Number.isFinite(n) && n >= 1 && n <= 120) clockEl.textContent = fmt(n * 60000);
+      }
+    });
+  });
+  document.querySelectorAll('.preset').forEach((b) => {
+    b.addEventListener('click', () => {
+      S.focusMin = +b.dataset.focus; S.walkMin = +b.dataset.walk;
+      store.set('focusMin', S.focusMin); store.set('walkMin', S.walkMin);
+      syncInputs(); render();
+    });
+  });
+
+  // ---------- Tombol ----------
+  startBtn.addEventListener('click', () => {
+    ensureAudio();
+    requestNotif();
+    readInputs(); syncInputs();
+    noticeEl.textContent = '';
+    S.cycle = 0;
+    beginFocus(false);
+    startTicker();
+  });
+  pauseBtn.addEventListener('click', () => {
+    if (S.phase === 'idle') return;
+    const now = Date.now();
+    if (!S.paused) {
+      S.remainMs = Math.max(0, S.endAt - now);
+      S.eyeRemainMs = Math.max(0, S.eyeEndAt - now);
+      S.paused = true;
+    } else {
+      S.endAt = now + S.remainMs;
+      S.eyeEndAt = now + S.eyeRemainMs;
+      S.repeatAt = Math.max(S.repeatAt, now); // jangan langsung berbunyi ulang setelah dilanjutkan
+      S.paused = false;
+    }
+    render();
+  });
+  skipBtn.addEventListener('click', () => { if (S.phase === 'break') beginFocus(false); });
+  stopBtn.addEventListener('click', () => {
+    stopTicker(); closeNotif();
+    S.phase = 'idle'; S.paused = false; S.cycle = 0;
+    render();
+  });
+
+  syncInputs();
+  render();
+})();
+</script>
+</body>
+</html>
