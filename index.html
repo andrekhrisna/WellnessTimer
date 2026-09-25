@@ -136,6 +136,24 @@
   .app[data-phase="break"] .btn-primary { background: var(--rest); }
   .btn-quiet { background: none; border-color: var(--line); }
   .notice { margin: 14px 0 0; font-size: 13px; color: var(--warn); min-height: 1em; }
+  .notice.info { color: var(--muted); }
+  .sound-gate {
+    display: block; width: 100%; margin-top: 12px; padding: 10px 14px; border-radius: 12px; font-weight: 600;
+    background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn);
+    border: 1px dashed color-mix(in srgb, var(--warn) 60%, transparent);
+  }
+  .schedule { margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--line); text-align: left; }
+  .schedule summary { cursor: pointer; font-size: 14px; color: var(--muted); padding: 6px 0; }
+  .schedule summary:hover { color: var(--ink); }
+  .sched-toggle { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; margin: 8px 0 10px; }
+  .sched-row { display: grid; grid-template-columns: 58px 1fr; gap: 8px; align-items: center; margin: 6px 0; font-size: 14px; }
+  .sched-row input {
+    width: 100%; font: inherit; font-size: 13px; padding: 6px 8px; background: var(--paper); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px;
+  }
+  .sched-row input[aria-invalid="true"] { border-color: var(--warn); }
+  .sched-note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+  .sched-err { font-size: 12px; color: var(--warn); margin: 4px 0 0; min-height: 1em; }
 
   /* ---------- Kartu Hari Ini: ayat, syukur, refleksi ---------- */
   .today {
@@ -264,7 +282,17 @@
       <button class="btn btn-quiet" id="skipBtn" type="button" hidden>Lanjut fokus</button>
       <button class="btn btn-quiet" id="stopBtn" type="button" hidden>Berhenti</button>
     </div>
+    <button class="sound-gate" id="soundGate" type="button" hidden>Klik di sini untuk mengaktifkan suara alarm</button>
     <p class="notice" id="notice" aria-live="polite"></p>
+
+    <details class="schedule" id="scheduleBox">
+      <summary>Jam kerja</summary>
+      <label class="sched-toggle"><input type="checkbox" id="schedOn">
+        <span>Mulai dan berhenti otomatis sesuai jam kerja</span></label>
+      <div id="schedRows"></div>
+      <p class="sched-err" id="schedErr" aria-live="polite"></p>
+      <p class="sched-note">Tulis beberapa rentang dipisah koma, misalnya 09.00-12.00, 13.00-16.00. Kosongkan untuk hari libur. Halaman ini perlu tetap terbuka agar timer bisa mulai sendiri.</p>
+    </details>
   </div>
 </main>
 
@@ -357,8 +385,71 @@
     walkMin: clampInt(store.get('walkMin', 2), 1, 30, 2),
     cycle: 0, isWater: false,
     acked: false, repeated: false, repeatAt: 0,
-    muted: !!store.get('muted', false)
+    muted: !!store.get('muted', false),
+    mode: 'manual',       // manual | auto (auto = mengikuti blok jam kerja)
+    windowKey: null,
+    lastTick: 0
   };
+
+  // ---------- Jam kerja ----------
+  const AWAY_MS = 3 * 60000;   // lewat 3 menit dari jadwal / laptop tertidur = dianggap baru kembali
+  const DAY_NAMES = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+  const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
+  const DEFAULT_SCHED = {
+    1: '09.00-12.00, 13.00-16.00, 19.00-21.00',
+    2: '09.00-12.00',
+    3: '09.00-12.00, 13.00-16.00, 19.00-21.00',
+    4: '09.00-12.00',
+    5: '09.00-12.00, 13.00-16.00, 19.00-21.00',
+    6: '', 0: ''
+  };
+  let schedText = Object.assign({}, DEFAULT_SCHED, store.get('schedule', {}));
+  let schedOn = store.get('scheduleOn', true) !== false;
+  let schedRanges = {};
+  const hm = (min) => String(Math.floor(min / 60)).padStart(2, '0') + '.' + String(min % 60).padStart(2, '0');
+  function parseRanges(text) {
+    const out = [];
+    const parts = String(text || '').split(',').map((s) => s.trim()).filter(Boolean);
+    for (const part of parts) {
+      const m = part.match(/^(\d{1,2})[.:](\d{2})\s*[-–—]\s*(\d{1,2})[.:](\d{2})$/);
+      if (!m) return { error: '"' + part + '" tidak terbaca. Contoh: 09.00-12.00' };
+      const a = +m[1] * 60 + +m[2], b = +m[3] * 60 + +m[4];
+      if (+m[1] > 24 || +m[3] > 24 || +m[2] > 59 || +m[4] > 59 || b > 1440) return { error: '"' + part + '" bukan jam yang valid.' };
+      if (b <= a) return { error: '"' + part + '": jam selesai harus setelah jam mulai.' };
+      out.push([a, b]);
+    }
+    out.sort((x, y) => x[0] - y[0]);
+    for (let i = 1; i < out.length; i++) if (out[i][0] < out[i - 1][1]) return { error: 'Ada rentang yang tumpang tindih.' };
+    return { ranges: out };
+  }
+  function rebuildRanges() {
+    schedRanges = {};
+    for (const d of DAY_ORDER) { const r = parseRanges(schedText[d]); schedRanges[d] = r.ranges || []; }
+  }
+  rebuildRanges();
+  function dateKey(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+  function currentWindow(ts) {
+    const d = new Date(ts), min = d.getHours() * 60 + d.getMinutes();
+    for (const [a, b] of schedRanges[d.getDay()] || []) {
+      if (min >= a && min < b) {
+        const end = new Date(d); end.setHours(Math.floor(b / 60), b % 60, 0, 0);
+        return { key: dateKey(d) + '@' + a, endTs: end.getTime(), endMin: b };
+      }
+    }
+    return null;
+  }
+  function nextWindowText(ts) {
+    const now = new Date(ts), nowMin = now.getHours() * 60 + now.getMinutes();
+    for (let off = 0; off < 8; off++) {
+      const d = new Date(now); d.setDate(now.getDate() + off);
+      for (const [a] of schedRanges[d.getDay()] || []) {
+        if (off === 0 && a <= nowMin) continue;
+        const when = off === 0 ? 'hari ini' : off === 1 ? 'besok' : DAY_NAMES[d.getDay()];
+        return when + ' pukul ' + hm(a);
+      }
+    }
+    return null;
+  }
 
   function clampInt(v, min, max, fallback) {
     const n = parseInt(v, 10);
@@ -417,6 +508,21 @@
     if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
     return audioCtx;
   }
+  // Chrome baru mengizinkan suara setelah halaman diklik sekali. Tampilkan penanda selama suara belum aktif.
+  const soundGate = $('soundGate');
+  function renderGate() {
+    const needed = !S.muted && (schedOn || S.phase !== 'idle');
+    soundGate.hidden = !(needed && audioCtx && audioCtx.state !== 'running');
+  }
+  function unlockAudio() {
+    const ctx = ensureAudio();
+    if (!ctx) return;
+    if (!ctx.__gateHooked) { ctx.__gateHooked = true; ctx.addEventListener('statechange', renderGate); }
+    renderGate();
+  }
+  soundGate.addEventListener('click', () => { unlockAudio(); const m = S.muted; S.muted = false; chime('test'); S.muted = m; });
+  document.addEventListener('pointerdown', unlockAudio, true);
+  document.addEventListener('keydown', unlockAudio, true);
   // Satu ketukan "lonceng": nada dasar + beberapa harmonik, serangan cepat, dengung yang meluruh.
   // Harmonik menaruh energi di 2–4 kHz, rentang yang paling peka di telinga dan tetap terdengar di speaker laptop.
   function bell(ctx, t, freq, dur, level) {
@@ -561,6 +667,11 @@
   }
 
   // ---------- Fase ----------
+  let noticeAt = 0;
+  function setNotice(text, info) {
+    noticeEl.textContent = text || ''; noticeEl.classList.toggle('info', !!info);
+    noticeAt = info && text ? Date.now() : 0;   // pesan informasi hilang sendiri setelah 10 menit
+  }
   function beginFocus(fromBreak) {
     closeNotif();
     S.phase = 'focus'; S.paused = false;
@@ -580,6 +691,7 @@
     S.eyeEndAt = now + Math.min(EYE_MS, walkMs);
     S.acked = false; S.repeated = false;
     S.repeatAt = now + Math.min(REPEAT_MAX_MS, walkMs / 2);
+    setNotice('');
     chime('break');
     notify(
       S.isWater ? 'Berdiri dan minum air' : 'Waktunya berdiri',
@@ -590,9 +702,46 @@
     render();
   }
 
+  function toIdle() {
+    closeNotif();
+    S.phase = 'idle'; S.paused = false; S.cycle = 0; S.mode = 'manual'; S.windowKey = null;
+  }
+  function startRun(mode, win) {
+    S.cycle = 0; S.mode = mode; S.windowKey = win ? win.key : null;
+    beginFocus(false);
+  }
+  function checkSchedule(now) {
+    const win = schedOn ? currentWindow(now) : null;
+    if (S.phase !== 'idle' && S.mode === 'auto' && (!win || win.key !== S.windowKey)) {
+      toIdle();                                   // blok jam kerja selesai: berhenti tanpa bunyi
+      setNotice('Jam kerja blok ini selesai. Timer berhenti sendiri.', true);
+      return true;
+    }
+    if (!win) return false;
+    if (S.phase !== 'idle' && S.mode === 'manual') { S.mode = 'auto'; S.windowKey = win.key; }  // sesi manual ikut jadwal
+    if (S.phase === 'idle' && store.get('skipWindow', null) !== win.key) {
+      startRun('auto', win);                      // mulai sendiri tanpa bunyi
+      setNotice('Jam kerja dimulai. Timer berjalan sampai pukul ' + hm(win.endMin) + '.', true);
+      notify('Jam kerja dimulai', 'Wellness Timer berjalan sampai pukul ' + hm(win.endMin) + '.', false);
+      return true;
+    }
+    return false;
+  }
+
   function tick() {
-    if (S.phase === 'idle' || S.paused) return;
     const now = Date.now();
+    const gap = S.lastTick ? now - S.lastTick : 0;
+    S.lastTick = now;
+    if (noticeAt && now - noticeAt > 10 * 60000) setNotice('');
+    const changed = checkSchedule(now);
+    if (S.phase === 'idle' || S.paused) { render(); return; }
+    if (changed) { render(); return; }
+    // Baru kembali: laptop sempat tertidur, atau jadwal alarm sudah lewat jauh. Mulai fokus lagi dengan tenang.
+    if (gap > AWAY_MS || now - S.endAt > AWAY_MS) {
+      beginFocus(false);
+      setNotice('Selamat datang kembali. Sesi fokus dimulai dari awal.', true);
+      return;
+    }
     if (now >= S.endAt) {
       if (S.phase === 'focus') beginBreak(); else beginFocus(true);
       return;
@@ -627,13 +776,29 @@
     clockEl.textContent = time;
 
     if (idle) {
-      phaseEl.textContent = 'Siap mulai';
-      hintEl.textContent = 'Setelah dimulai, timer berjalan sendiri. Tidak ada tombol yang wajib ditekan.';
+      const win = schedOn ? currentWindow(now) : null;
+      const next = schedOn ? nextWindowText(now) : null;
+      if (!schedOn) {
+        phaseEl.textContent = 'Siap mulai';
+        hintEl.textContent = 'Setelah dimulai, timer berjalan sendiri. Tidak ada tombol yang wajib ditekan.';
+      } else if (win) {
+        phaseEl.textContent = 'Dihentikan';
+        hintEl.textContent = next ? 'Timer mulai sendiri lagi ' + next + '. Tekan Mulai bila ingin sekarang.'
+                                  : 'Tekan Mulai bila ingin menjalankan timer sekarang.';
+      } else {
+        phaseEl.textContent = 'Di luar jam kerja';
+        hintEl.textContent = next ? 'Timer mulai sendiri ' + next + '.' : 'Belum ada jam kerja yang diatur.';
+      }
+      startBtn.textContent = schedOn ? 'Mulai sekarang' : 'Mulai';
       document.title = 'Wellness Timer';
     } else if (S.phase === 'focus') {
       phaseEl.textContent = S.paused ? 'Fokus dijeda' : 'Fokus';
+      const until = S.mode === 'auto' ? currentWindow(now) : null;
       hintEl.textContent = S.paused ? 'Lanjutkan kapan saja.'
-        : 'Pengingat berikutnya sekitar pukul ' + clockTime(S.endAt) + '.';
+        : (until && S.endAt >= until.endTs)
+          ? 'Timer berhenti sendiri pukul ' + hm(until.endMin) + ', sebelum pengingat berikutnya.'
+          : 'Pengingat berikutnya sekitar pukul ' + clockTime(S.endAt) + '.'
+            + (until ? ' Jam kerja sampai ' + hm(until.endMin) + '.' : '');
       document.title = (S.paused ? 'Dijeda ' : '') + time + ' · Fokus';
     } else {
       phaseEl.textContent = S.paused ? 'Istirahat dijeda' : (S.isWater ? 'Berdiri dan minum air' : 'Waktunya berdiri');
@@ -656,6 +821,7 @@
     document.querySelectorAll('.preset').forEach((b) => {
       b.setAttribute('aria-pressed', String(+b.dataset.focus === S.focusMin && +b.dataset.walk === S.walkMin));
     });
+    renderGate();
   }
 
   // ---------- Pengaturan durasi ----------
@@ -687,10 +853,10 @@
     ensureAudio();
     requestNotif();
     readInputs(); syncInputs();
-    noticeEl.textContent = '';
-    S.cycle = 0;
-    beginFocus(false);
-    startTicker();
+    setNotice('');
+    const win = schedOn ? currentWindow(Date.now()) : null;
+    store.set('skipWindow', null);
+    startRun(win ? 'auto' : 'manual', win);
   });
   pauseBtn.addEventListener('click', () => {
     if (S.phase === 'idle') return;
@@ -709,13 +875,40 @@
   });
   skipBtn.addEventListener('click', () => { if (S.phase === 'break') beginFocus(false); });
   stopBtn.addEventListener('click', () => {
-    stopTicker(); closeNotif();
-    S.phase = 'idle'; S.paused = false; S.cycle = 0;
+    const win = schedOn ? currentWindow(Date.now()) : null;
+    if (win) store.set('skipWindow', win.key);   // jangan mulai lagi sampai blok jam kerja berikutnya
+    toIdle(); setNotice('');
     render();
   });
 
+  // ---------- Editor jam kerja ----------
+  const schedRows = $('schedRows'), schedOnEl = $('schedOn'), schedErr = $('schedErr');
+  schedOnEl.checked = schedOn;
+  schedOnEl.addEventListener('change', () => {
+    schedOn = schedOnEl.checked; store.set('scheduleOn', schedOn);
+    if (!schedOn && S.mode === 'auto') { S.mode = 'manual'; S.windowKey = null; }
+    tick();
+  });
+  DAY_ORDER.forEach((d) => {
+    const row = document.createElement('label'); row.className = 'sched-row';
+    const name = document.createElement('span'); name.textContent = DAY_NAMES[d];
+    const inp = document.createElement('input'); inp.type = 'text'; inp.value = schedText[d]; inp.placeholder = 'Libur';
+    inp.setAttribute('aria-label', 'Jam kerja ' + DAY_NAMES[d]);
+    inp.addEventListener('change', () => {
+      const r = parseRanges(inp.value);
+      if (r.error) { inp.setAttribute('aria-invalid', 'true'); schedErr.textContent = DAY_NAMES[d] + ': ' + r.error; return; }
+      inp.removeAttribute('aria-invalid'); schedErr.textContent = '';
+      inp.value = r.ranges.map(([a, b]) => hm(a) + '-' + hm(b)).join(', ');
+      schedText[d] = inp.value; store.set('schedule', schedText); rebuildRanges(); tick();
+    });
+    row.append(name, inp); schedRows.append(row);
+  });
+
   syncInputs();
-  render();
+  ensureAudio();        // dibuat sekarang; Chrome menahannya sampai halaman diklik sekali
+  if (audioCtx && !audioCtx.__gateHooked) { audioCtx.__gateHooked = true; audioCtx.addEventListener('statechange', renderGate); }
+  startTicker();        // detak selalu jalan agar jadwal bisa memulai timer sendiri
+  tick();
   window.WT = { chime, ensureAudio, notifState };
 })();
 </script>
