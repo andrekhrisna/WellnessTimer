@@ -117,6 +117,10 @@
     background: none; border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; font-size: 13px;
   }
   .preset[aria-pressed="true"] { border-color: var(--focus); color: var(--focus); font-weight: 600; }
+  .volume { display: flex; gap: 6px; justify-content: center; align-items: center; flex-wrap: wrap; margin-top: 14px; font-size: 14px; color: var(--muted); }
+  .pill { background: none; border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; font-size: 13px; }
+  .pill[aria-pressed="true"] { border-color: var(--focus); color: var(--focus); font-weight: 600; }
+  .pill-test { border-style: dashed; }
   .fields { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; font-size: 14px; }
   .fields label { display: flex; align-items: center; gap: 6px; color: var(--muted); }
   .fields input {
@@ -244,6 +248,13 @@
       <div class="fields">
         <label>Fokus <input id="focusIn" type="number" inputmode="numeric" min="1" max="120" step="1"> menit</label>
         <label>Istirahat <input id="walkIn" type="number" inputmode="numeric" min="1" max="30" step="1"> menit</label>
+      </div>
+      <div class="volume" role="group" aria-label="Volume alarm">
+        <span>Volume alarm</span>
+        <button class="pill" type="button" data-vol="sedang">Sedang</button>
+        <button class="pill" type="button" data-vol="keras">Keras</button>
+        <button class="pill" type="button" data-vol="maks">Maksimal</button>
+        <button class="pill pill-test" type="button" id="testSound">Tes suara</button>
       </div>
     </section>
 
@@ -386,38 +397,78 @@
 
   // ---------- Suara: satu AudioContext dipakai ulang ----------
   let audioCtx = null;
+  // Rantai suara: nada -> bus -> kompresor (menaikkan kekerasan yang terdengar tanpa pecah) -> volume -> speaker
+  const VOLUME = { sedang: 0.55, keras: 0.8, maks: 1.0 };
+  let volKey = store.get('volume', 'keras');
+  if (!VOLUME[volKey]) volKey = 'keras';
+  let bus = null, master = null;
   function ensureAudio() {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return null;
-    if (!audioCtx) { try { audioCtx = new AC(); } catch (e) { return null; } }
+    if (!audioCtx) {
+      try { audioCtx = new AC(); } catch (e) { return null; }
+      const comp = audioCtx.createDynamicsCompressor();
+      comp.threshold.value = -20; comp.knee.value = 10; comp.ratio.value = 8;
+      comp.attack.value = 0.002; comp.release.value = 0.2;
+      bus = audioCtx.createGain(); bus.gain.value = 1;
+      master = audioCtx.createGain(); master.gain.value = VOLUME[volKey];
+      bus.connect(comp); comp.connect(master); master.connect(audioCtx.destination);
+    }
     if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
     return audioCtx;
   }
-  function chime(kind, soft) {
+  // Satu ketukan "lonceng": nada dasar + beberapa harmonik, serangan cepat, dengung yang meluruh.
+  // Harmonik menaruh energi di 2–4 kHz, rentang yang paling peka di telinga dan tetap terdengar di speaker laptop.
+  function bell(ctx, t, freq, dur, level) {
+    [[1, 1], [2, 0.45], [3, 0.25], [4.01, 0.12]].forEach(([mult, amp], i) => {
+      const osc = ctx.createOscillator(), g = ctx.createGain();
+      osc.type = 'sine'; osc.frequency.setValueAtTime(freq * mult, t);
+      const d = dur / (1 + i * 0.6);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(level * amp, t + 0.006);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+      osc.connect(g); g.connect(bus);
+      osc.start(t); osc.stop(t + d + 0.05);
+    });
+  }
+  // Pola bunyi. Nada mayor (G–B–D) supaya terdengar ramah, bukan sirene.
+  const PATTERNS = {
+    break:   { notes: [784, 988, 1175], gap: 0.2, rounds: 2, pause: 0.7, dur: 1.3, level: 0.9 },
+    repeat:  { notes: [784, 988, 1175], gap: 0.2, rounds: 3, pause: 0.6, dur: 1.3, level: 1.0 },
+    back:    { notes: [1175, 880],      gap: 0.28, rounds: 2, pause: 0.5, dur: 1.2, level: 0.8 },
+    journal: { notes: [988, 1175],      gap: 0.3, rounds: 1, pause: 0,   dur: 1.4, level: 0.7 },
+    test:    { notes: [784, 988, 1175], gap: 0.2, rounds: 1, pause: 0,   dur: 1.3, level: 0.9 }
+  };
+  function chime(kind) {
     if (S.muted) return;
     const ctx = ensureAudio();
     if (!ctx) return;
-    const notes = kind === 'break' ? [660, 880, 990] : [880, 660];
-    const peak = soft ? 0.08 : 0.18;
-    const t0 = ctx.currentTime + 0.05;
-    notes.forEach((freq, i) => {
-      const t = t0 + i * 0.32;
-      const osc = ctx.createOscillator(), gain = ctx.createGain();
-      osc.type = 'sine'; osc.frequency.setValueAtTime(freq, t);
-      gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(peak, t + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.start(t); osc.stop(t + 0.65);
-    });
+    const p = PATTERNS[kind] || PATTERNS.break;
+    let t = ctx.currentTime + 0.05;
+    for (let r = 0; r < p.rounds; r++) {
+      p.notes.forEach((f, i) => bell(ctx, t + i * p.gap, f, p.dur, p.level));
+      t += (p.notes.length - 1) * p.gap + p.pause + 0.5;
+    }
   }
+  function renderVolume() {
+    document.querySelectorAll('.pill[data-vol]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.vol === volKey)));
+  }
+  document.querySelectorAll('.pill[data-vol]').forEach((b) => b.addEventListener('click', () => {
+    volKey = b.dataset.vol; store.set('volume', volKey); renderVolume();
+    ensureAudio(); if (master) master.gain.value = VOLUME[volKey];
+    const wasMuted = S.muted; S.muted = false; chime('test'); S.muted = wasMuted;
+  }));
+  document.getElementById('testSound').addEventListener('click', () => {
+    ensureAudio(); const wasMuted = S.muted; S.muted = false; chime('test'); S.muted = wasMuted;
+  });
+  renderVolume();
   function renderSound() {
     soundBtn.innerHTML = S.muted ? ICON_MUTE : ICON_SOUND;
     soundBtn.setAttribute('aria-label', S.muted ? 'Nyalakan suara' : 'Matikan suara');
   }
   soundBtn.addEventListener('click', () => {
     S.muted = !S.muted; store.set('muted', S.muted); renderSound();
-    if (!S.muted) chime('back', true);
+    if (!S.muted) chime('test');
   });
   renderSound();
 
@@ -515,7 +566,7 @@
     S.phase = 'focus'; S.paused = false;
     S.endAt = Date.now() + S.focusMin * 60000;
     if (fromBreak) {
-      chime('back', false);
+      chime('back');
       notify('Kembali fokus', 'Istirahat selesai. Timer fokus sudah berjalan lagi.', false);
     }
     render();
@@ -529,7 +580,7 @@
     S.eyeEndAt = now + Math.min(EYE_MS, walkMs);
     S.acked = false; S.repeated = false;
     S.repeatAt = now + Math.min(REPEAT_MAX_MS, walkMs / 2);
-    chime('break', false);
+    chime('break');
     notify(
       S.isWater ? 'Berdiri dan minum air' : 'Waktunya berdiri',
       S.isWater ? 'Pandang jauh 20 detik, ambil segelas air, lalu jalan sebentar.'
@@ -548,7 +599,7 @@
     }
     if (S.phase === 'break' && !S.acked && !S.repeated && now >= S.repeatAt) {
       S.repeated = true;
-      chime('break', true);   // sekali saja, lebih pelan
+      chime('repeat');   // sekali saja, lebih panjang dan sedikit lebih keras
     }
     render();
   }
@@ -821,7 +872,7 @@
   function remind(kind) {
     const isGrat = kind === 'gratitude';
     const field = isGrat ? gratIn : reflIn;
-    if (window.WT) window.WT.chime('back', true);
+    if (window.WT) window.WT.chime('journal');
     if (window.WT && window.WT.notifState() === 'granted') {
       try {
         if (jNotif) jNotif.close();
