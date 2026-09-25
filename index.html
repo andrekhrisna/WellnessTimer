@@ -200,6 +200,12 @@
   .flash { animation: flash 1.6s ease; }
   @keyframes flash { 0%, 60% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--rest) 45%, transparent); } 100% { box-shadow: none; } }
 
+  body[data-passive="true"] .today,
+  body[data-passive="true"] .setup,
+  body[data-passive="true"] .actions,
+  body[data-passive="true"] .schedule,
+  body[data-passive="true"] .sound-gate { display: none !important; }
+
   [hidden] { display: none !important; }
   @media (prefers-reduced-motion: reduce) {
     .horizon, .horizon .sun { transition: none; }
@@ -907,9 +913,38 @@
   syncInputs();
   ensureAudio();        // dibuat sekarang; Chrome menahannya sampai halaman diklik sekali
   if (audioCtx && !audioCtx.__gateHooked) { audioCtx.__gateHooked = true; audioCtx.addEventListener('statechange', renderGate); }
-  startTicker();        // detak selalu jalan agar jadwal bisa memulai timer sendiri
-  tick();
-  window.WT = { chime, ensureAudio, notifState };
+  render();
+  // Hanya satu tab yang menjalankan timer, supaya alarm tidak berbunyi dobel.
+  // Tab lain menunggu diam-diam dan mengambil alih bila tab aktif ditutup.
+  const WT = window.WT = { chime, ensureAudio, notifState, active: false };
+  function activate() {
+    if (WT.active) return;
+    WT.active = true;
+    document.body.removeAttribute('data-passive');
+    setNotice('');
+    startTicker();        // detak selalu jalan agar jadwal bisa memulai timer sendiri
+    tick();
+  }
+  function showPassive() {
+    document.body.setAttribute('data-passive', 'true');
+    phaseEl.textContent = 'Sudah terbuka di tab lain';
+    hintEl.textContent = 'Wellness Timer sedang berjalan di tab atau jendela lain. Tab ini boleh ditutup, dan akan mengambil alih sendiri bila yang lain ditutup.';
+    document.title = 'Wellness Timer (tab cadangan)';
+  }
+  if (navigator.locks && navigator.locks.request) {
+    const hold = () => { activate(); return new Promise(() => {}); };   // kunci dipegang selama tab terbuka
+    navigator.locks.request('wellness-timer-active', { ifAvailable: true }, (lock) => {
+      if (lock) return hold();
+      showPassive();
+      navigator.locks.request('wellness-timer-active', () => { location.reload(); return new Promise(() => {}); });
+    }).catch(activate);
+  } else {
+    activate();
+  }
+  // Versi ini bukan PWA. Bila service worker dari percobaan PWA sempat terpasang, lepaskan.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => r.unregister())).catch(() => {});
+  }
 })();
 </script>
 <script>
@@ -1078,6 +1113,7 @@
     }
   }
   function checkReminders() {
+    if (window.WT && !window.WT.active) return;   // tab cadangan tidak membunyikan pengingat
     const today = dayKey();
     if (today !== currentDay) { loadToday(); renderHistory(); loadVerse(false); }
     const fired = store.get('journalFired', {});
